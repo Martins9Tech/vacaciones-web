@@ -9,6 +9,11 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Faltan datos' });
   }
 
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error('ANTHROPIC_API_KEY no configurada');
+    return res.status(500).json({ error: 'API key no configurada' });
+  }
+
   const prompt = `Eres un experto planificador de viajes. Crea un itinerario detallado y emocionante para un viaje a "${destination}" de ${days} día(s).
 
 El viajero quiere un mix de turismo cultural, aventura/naturaleza, gastronomía y relax.
@@ -48,20 +53,48 @@ Genera exactamente ${days} día(s). Usa nombres reales de lugares de ${destinati
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-5',
         max_tokens: 8000,
         messages: [{ role: 'user', content: prompt }]
       })
     });
 
-    const data = await response.json();
-    const raw = data.content?.find(b => b.type === 'text')?.text || '';
-    const clean = raw.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
+    const rawText = await response.text();
+    console.log('Status Anthropic:', response.status);
+    console.log('Respuesta cruda:', rawText.substring(0, 500));
 
-    return res.status(200).json(parsed);
+    if (!response.ok) {
+      return res.status(500).json({ 
+        error: 'Error en API de Anthropic',
+        detail: rawText.substring(0, 300)
+      });
+    }
+
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (e) {
+      console.error('No se pudo parsear respuesta de Anthropic:', rawText);
+      return res.status(500).json({ error: 'Respuesta inválida de la API' });
+    }
+
+    const raw = data.content?.find(b => b.type === 'text')?.text || '';
+    if (!raw) {
+      console.error('Respuesta sin contenido de texto:', data);
+      return res.status(500).json({ error: 'Sin contenido en la respuesta' });
+    }
+
+    const clean = raw.replace(/```json|```/g, '').trim();
+    
+    try {
+      const parsed = JSON.parse(clean);
+      return res.status(200).json(parsed);
+    } catch (e) {
+      console.error('Error parseando JSON del modelo:', clean.substring(0, 500));
+      return res.status(500).json({ error: 'El modelo no devolvió JSON válido' });
+    }
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: 'Error generando itinerario' });
+    console.error('Error general:', e);
+    return res.status(500).json({ error: 'Error generando itinerario', detail: e.message });
   }
 }
